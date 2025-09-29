@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import pytesseract
@@ -12,7 +11,7 @@ st.set_page_config(page_title="Apostas OCR", layout="wide")
 if "bets" not in st.session_state:
     st.session_state["bets"] = pd.DataFrame(columns=["Grupo", "Casa", "Descrição", "Valor", "Retorno", "Status"])
 
-st.title("📊 Acompanhamento de Apostas (Básico)")
+st.title("📊 Acompanhamento de Apostas (Básico Corrigido)")
 
 # ---- UPLOAD E OCR ----
 uploaded_file = st.file_uploader("Envie o print da aposta", type=["png", "jpg", "jpeg"])
@@ -25,12 +24,14 @@ if uploaded_file:
         text = pytesseract.image_to_string(image, lang="por")
         st.text_area("Texto detectado", text, height=150)
 
-        # Detecta status básico
-        if "green" in text.lower():
+        # Detecta status com tolerância a erros do OCR
+        text_lower = text.lower()
+
+        if any(x in text_lower for x in ["green", "gren", "grenn", "ganho", "vencida"]):
             status = "Green"
-        elif "red" in text.lower():
+        elif any(x in text_lower for x in ["red", "perdida", "loss"]):
             status = "Red"
-        elif "void" in text.lower():
+        elif any(x in text_lower for x in ["void", "anulada", "cancelada"]):
             status = "Void"
         else:
             status = "Pendente"
@@ -54,30 +55,5 @@ st.subheader("📑 Apostas Registradas")
 st.dataframe(st.session_state["bets"], use_container_width=True)
 
 # ---- RESUMO ----
-df = st.session_state["bets"]
-if not df.empty:
-    df["Lucro"] = df["Retorno"] - df["Valor"]
-
-    total_reais = df["Lucro"].sum()
-    total_unidades = df["Lucro"].sum() / df["Valor"].mean() if df["Valor"].mean() > 0 else 0
-
-    col1, col2 = st.columns(2)
-    col1.metric("💰 Lucro/Prejuízo (R$)", f"{total_reais:.2f}")
-    col2.metric("📏 Lucro/Prejuízo (Unidades)", f"{total_unidades:.2f}")
-
-# ---- GRÁFICOS ----
-if not df.empty:
-    st.subheader("📈 Gráficos")
-
-    # Por grupo
-    fig1, ax1 = plt.subplots()
-    df.groupby("Grupo")["Lucro"].sum().plot(kind="bar", ax=ax1)
-    ax1.set_title("Lucro por Grupo")
-    st.pyplot(fig1)
-
-    # Evolução
-    fig2, ax2 = plt.subplots()
-    df["Lucro"].cumsum().plot(ax=ax2)
-    ax2.set_title("Evolução do Lucro")
-    st.pyplot(fig2)
+df = st.session_s
 
