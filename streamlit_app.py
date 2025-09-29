@@ -1,19 +1,25 @@
+```python
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import datetime
-from rapidfuzz import fuzz
 import pytesseract
 from PIL import Image
+import matplotlib.pyplot as plt
 
-# ---- BANCO DE DADOS (SQLite) ----
+# -----------------------------
+# Configuração do app
+# -----------------------------
+st.set_page_config(page_title="Apostas OCR", layout="wide")
+
+# -----------------------------
+# Banco de Dados SQLite
+# -----------------------------
 def init_db():
     conn = sqlite3.connect("apostas.db")
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS bets (
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS apostas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            data TEXT,
             grupo TEXT,
             casa TEXT,
             descricao TEXT,
@@ -23,85 +29,114 @@ def init_db():
         )
     """)
     conn.commit()
-    conn.close()
+    return conn
 
-def add_bet(data, grupo, casa, descricao, valor, retorno, status):
-    conn = sqlite3.connect("apostas.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO bets (data, grupo, casa, descricao, valor, retorno, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (data, grupo, casa, descricao, valor, retorno, status))
+conn = init_db()
+
+def salvar_aposta(grupo, casa, descricao, valor, retorno, status):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO apostas (grupo, casa, descricao, valor, retorno, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (grupo, casa, descricao, valor, retorno, status),
+    )
     conn.commit()
-    conn.close()
 
-def get_bets():
-    conn = sqlite3.connect("apostas.db")
-    c = conn.cursor()
-    c.execute("SELECT * FROM bets")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+def carregar_apostas():
+    return pd.read_sql("SELECT * FROM apostas", conn)
 
-# ---- DETECÇÃO DE STATUS (Green, Red, Void) ----
-def detectar_status(text):
-    text_lower = text.lower()
-
-    if fuzz.partial_ratio(text_lower, "green") > 65 or any(x in text_lower for x in ["gren", "grenn", "ganho", "vencida", "gree", "grern", "grcn"]):
-        return "Green"
-    elif fuzz.partial_ratio(text_lower, "red") > 80 or any(x in text_lower for x in ["perdida", "loss"]):
-        return "Red"
-    elif fuzz.partial_ratio(text_lower, "void") > 70 or any(x in text_lower for x in ["anulada", "cancelada"]):
-        return "Void"
-    else:
-        return "Pendente"
-
-# ---- INICIALIZA BANCO ----
-init_db()
-
-# ---- INTERFACE STREAMLIT ----
-st.set_page_config(page_title="OCR Apostas", page_icon="📊", layout="wide")
-st.title("📊 OCR Apostas com Banco de Dados (SQLite)")
-
-uploaded_file = st.file_uploader("📤 Envie um print da aposta", type=["png", "jpg", "jpeg"])
-
-if uploaded_file:
+# -----------------------------
+# Função para processar imagens
+# -----------------------------
+def processar_imagem(uploaded_file):
     image = Image.open(uploaded_file)
-    st.image(image, caption="🖼️ Imagem enviada", use_container_width=True)
+    texto = pytesseract.image_to_string(image, lang="por")
 
-    try:
-        text = pytesseract.image_to_string(image, lang="por")
-        st.text_area("📝 Texto reconhecido:", text, height=150)
+    status = "Indefinido"
+    if "green" in texto.lower():
+        status = "Green"
+    elif "red" in texto.lower():
+        status = "Red"
+    elif "void" in texto.lower():
+        status = "Void"
 
-        status = detectar_status(text)
+    valor = 0
+    retorno = 0
+    for linha in texto.splitlines():
+        if "R$" in linha:
+            numeros = [n.replace("R$", "").replace(",", ".").strip() for n in linha.split() if "R$" in n]
+            try:
+                if len(numeros) >= 1:
+                    valor = float(numeros[0])
+                if len(numeros) >= 2:
+                    retorno = float(numeros[1])
+            except:
+                pass
 
-        grupo = st.text_input("👥 Grupo")
-        casa = st.text_input("🏠 Casa de Aposta")
-        descricao = st.text_input("📌 Descrição da aposta")
-        valor = st.number_input("💰 Valor apostado (R$)", min_value=0.0, step=1.0)
-        retorno = st.number_input("🎯 Retorno esperado (R$)", min_value=0.0, step=1.0)
+    return {
+        "grupo": "Grupo 1",  # preenchimento manual depois
+        "casa": "Betano",    # detectar por OCR depois
+        "descricao": texto[:50],
+        "valor": valor,
+        "retorno": retorno,
+        "status": status,
+    }
 
-        if st.button("💾 Salvar aposta"):
-            add_bet(datetime.now().strftime("%d/%m/%Y %H:%M"), grupo, casa, descricao, valor, retorno, status)
-            st.success("✅ Aposta salva no banco de dados!")
+# -----------------------------
+# Interface Streamlit
+# -----------------------------
+st.title("📊 Sistema de Apostas com OCR + Dashboard")
 
-    except Exception as e:
-        st.error(f"⚠️ Erro ao executar OCR: {e}")
+# Upload
+uploaded_file = st.file_uploader("Envie um print da aposta", type=["png", "jpg", "jpeg"])
+if uploaded_file:
+    aposta = processar_imagem(uploaded_file)
+    st.write("🔍 Resultado do OCR:", aposta)
 
-# ---- DASHBOARD ----
-st.subheader("📈 Histórico de apostas")
+    if st.button("Salvar aposta"):
+        salvar_aposta(
+            aposta["grupo"], aposta["casa"], aposta["descricao"], aposta["valor"], aposta["retorno"], aposta["status"]
+        )
+        st.success("✅ Aposta salva no banco de dados!")
 
-dados = get_bets()
-if dados:
-    df = pd.DataFrame(dados, columns=["ID", "Data", "Grupo", "Casa", "Descrição", "Valor", "Retorno", "Status"])
-    st.dataframe(df, use_container_width=True)
+# Carregar apostas salvas
+df = carregar_apostas()
+if not df.empty:
+    st.subheader("📑 Histórico de Apostas")
+    st.dataframe(df)
 
-    # Gráfico por status
-    st.subheader("📊 Lucro/Prejuízo por Status")
-    st.bar_chart(df.groupby("Status")["Valor"].sum())
+    # Calcular lucro/prejuízo
+    df["lucro"] = df["retorno"] - df["valor"]
 
-    # Gráfico por grupo
-    if "Grupo" in df.columns:
-        st.subheader("👥 Distribuição por Grupo")
-        st.bar_chart(df.groupby("Grupo")["Valor"].sum())
+    st.subheader("📈 Gráficos de Desempenho")
 
+    # Gráfico 1 - Evolução do lucro acumulado
+    st.write("Evolução do Lucro (R$)")
+    df["lucro_acumulado"] = df["lucro"].cumsum()
+    fig, ax = plt.subplots()
+    ax.plot(df.index, df["lucro_acumulado"], marker="o")
+    ax.set_ylabel("Lucro acumulado (R$)")
+    st.pyplot(fig)
+
+    # Gráfico 2 - Lucro por grupo
+    st.write("Lucro por Grupo")
+    fig, ax = plt.subplots()
+    df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax)
+    ax.set_ylabel("Lucro (R$)")
+    st.pyplot(fig)
+
+    # Gráfico 3 - Distribuição por status
+    st.write("Distribuição por Status")
+    fig, ax = plt.subplots()
+    df["status"].value_counts().plot(kind="pie", autopct="%1.1f%%", ax=ax)
+    ax.set_ylabel("")
+    st.pyplot(fig)
+
+    # Gráfico 4 - Lucro por casa de aposta
+    st.write("Lucro por Casa de Aposta")
+    fig, ax = plt.subplots()
+    df.groupby("casa")["lucro"].sum().plot(kind="barh", ax=ax)
+    ax.set_xlabel("Lucro (R$)")
+    st.pyplot(fig)
 else:
-    st.info("ℹ️ Nenhuma aposta registrada ainda.")
+    st.info("Nenhuma aposta registrada ainda. Faça upload de um print para começar.")
+```
