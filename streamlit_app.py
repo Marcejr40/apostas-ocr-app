@@ -4,11 +4,17 @@ import sqlite3
 from datetime import datetime
 import pytesseract
 from PIL import Image
+import io
 import matplotlib.pyplot as plt
 
-# ==============================
-# Funções de Banco de Dados
-# ==============================
+# =========================
+# CONFIGURAÇÃO DO APP
+# =========================
+st.set_page_config(page_title="Apostas OCR", layout="wide")
+
+# =========================
+# BANCO DE DADOS
+# =========================
 def init_db():
     conn = sqlite3.connect("apostas.db")
     c = conn.cursor()
@@ -21,6 +27,7 @@ def init_db():
             descricao TEXT,
             valor REAL,
             retorno REAL,
+            odd REAL,
             lucro REAL,
             status TEXT
         )
@@ -28,110 +35,126 @@ def init_db():
     conn.commit()
     conn.close()
 
-def add_bet_to_db(grupo, casa, descricao, valor, retorno, lucro, status):
+def add_bet_to_db(grupo, casa, descricao, valor, retorno, odd, status):
     conn = sqlite3.connect("apostas.db")
     c = conn.cursor()
+    lucro = retorno - valor if status == "Green" else -valor if status == "Red" else 0
     c.execute("""
-        INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, lucro, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, valor, retorno, lucro, status))
+        INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, odd, lucro, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, valor, retorno, odd, lucro, status))
     conn.commit()
     conn.close()
 
 def load_bets_df():
     conn = sqlite3.connect("apostas.db")
-    df = pd.read_sql("SELECT * FROM apostas ORDER BY id ASC", conn)
+    df = pd.read_sql("SELECT * FROM apostas ORDER BY id DESC", conn)
     conn.close()
     return df
 
-# ==============================
-# Funções de OCR
-# ==============================
-def process_image(img, lang="por"):
-    try:
-        text = pytesseract.image_to_string(img, lang=lang)
-        return text
-    except Exception as e:
-        return f"Erro ao executar OCR: {e}"
+# =========================
+# OCR
+# =========================
+def process_image(uploaded_file):
+    if uploaded_file is None:
+        return {}
 
-# ==============================
-# Função principal
-# ==============================
-def main():
-    st.set_page_config(page_title="Gerenciador de Apostas", layout="wide")
-    st.title("📊 Gerenciador de Apostas com OCR")
+    image = Image.open(uploaded_file)
+    text = pytesseract.image_to_string(image, lang="por").lower()
 
-    init_db()
+    # Inicializa dicionário com valores padrão
+    data = {
+        "grupo": "",
+        "casa": "",
+        "descricao": text[:50],
+        "valor": 0.0,
+        "retorno": 0.0,
+        "odd": 1.01,
+        "status": "Void"
+    }
 
-    menu = ["Cadastrar Aposta", "Visualizar Apostas"]
-    choice = st.sidebar.radio("Menu", menu)
+    # Detecta status
+    if "green" in text:
+        data["status"] = "Green"
+    elif "red" in text:
+        data["status"] = "Red"
+    elif "void" in text:
+        data["status"] = "Void"
 
-    if choice == "Cadastrar Aposta":
-        st.subheader("➕ Nova Aposta")
+    # Detecta valores
+    import re
+    numeros = re.findall(r"\d+[,.]?\d*", text)
+    if numeros:
+        try:
+            data["valor"] = float(numeros[0].replace(",", "."))
+            if len(numeros) > 1:
+                data["retorno"] = float(numeros[1].replace(",", "."))
+                data["odd"] = round(data["retorno"] / data["valor"], 2) if data["valor"] > 0 else 1.01
+        except:
+            pass
 
-        uploaded_file = st.file_uploader("Carregar print da aposta", type=["png", "jpg", "jpeg"])
-        descricao = ""
-        if uploaded_file is not None:
-            img = Image.open(uploaded_file)
-            st.image(img, caption="Imagem carregada", use_container_width=True)
+    return data
 
-            ocr_result = process_image(img)
-            st.text_area("Texto reconhecido pelo OCR", ocr_result, height=150)
-            descricao = ocr_result
+# =========================
+# INTERFACE
+# =========================
+st.title("📊 Controle de Apostas com OCR")
 
-        with st.form("nova_aposta"):
-            grupo = st.text_input("Grupo")
-            casa = st.text_input("Casa")
-            valor = st.number_input("Valor apostado (R$)", min_value=0.0, step=0.01)
-            retorno = st.number_input("Retorno esperado (R$)", min_value=0.0, step=0.01)
-            status = st.selectbox("Status", ["Green", "Red", "Void"])
-            submitted = st.form_submit_button("Salvar")
+init_db()
 
-            if submitted:
-                lucro = 0
-                if status == "Green":
-                    lucro = retorno - valor
-                elif status == "Red":
-                    lucro = -valor
-                else:
-                    lucro = 0
+uploaded_file = st.file_uploader("Envie o print da aposta", type=["png", "jpg", "jpeg"])
+ocr_data = process_image(uploaded_file) if uploaded_file else {}
 
-                add_bet_to_db(grupo, casa, descricao, valor, retorno, lucro, status)
-                st.success("Aposta salva com sucesso!")
+with st.form("nova_aposta"):
+    grupo = st.text_input("Grupo", value=ocr_data.get("grupo", ""))
+    casa = st.text_input("Casa", value=ocr_data.get("casa", ""))
+    descricao = st.text_area("Descrição", value=ocr_data.get("descricao", ""))
+    valor = st.number_input("Valor", min_value=0.0, value=float(ocr_data.get("valor", 0.0)), step=1.0)
+    retorno = st.number_input("Retorno", min_value=0.0, value=float(ocr_data.get("retorno", 0.0)), step=1.0)
+    odd = st.number_input("Odd", min_value=1.01, value=float(ocr_data.get("odd", 1.01)), step=0.01)
+    status = st.selectbox("Status", ["Green", "Red", "Void"], index=["Green", "Red", "Void"].index(ocr_data.get("status", "Void")))
 
-    elif choice == "Visualizar Apostas":
-        st.subheader("📋 Histórico de Apostas")
+    submit = st.form_submit_button("Salvar")
 
-        df = load_bets_df()
-        if df.empty:
-            st.warning("Nenhuma aposta cadastrada ainda.")
-        else:
-            st.dataframe(df, use_container_width=True)
+    if submit:
+        add_bet_to_db(grupo, casa, descricao, valor, retorno, odd, status)
+        st.success("✅ Aposta salva com sucesso!")
+        st.experimental_rerun()
 
-            st.subheader("📈 Resumo Financeiro")
-            total_investido = df["valor"].sum()
-            total_retorno = df["retorno"].sum()
-            total_lucro = df["lucro"].sum()
+st.divider()
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Investido", f"R$ {total_investido:,.2f}")
-            col2.metric("Total Retorno", f"R$ {total_retorno:,.2f}")
-            col3.metric("Lucro/Prejuízo", f"R$ {total_lucro:,.2f}")
+# =========================
+# RESUMO E GRÁFICOS
+# =========================
+df = load_bets_df()
 
-            st.subheader("📊 Gráficos")
-            col4, col5 = st.columns(2)
+if df.empty:
+    st.info("Nenhuma aposta registrada ainda.")
+else:
+    st.subheader("📋 Histórico de Apostas")
+    st.dataframe(df)
 
-            with col4:
-                fig1, ax1 = plt.subplots()
-                df["status"].value_counts().plot(kind="bar", ax=ax1, color=["green", "red", "gray"])
-                ax1.set_title("Quantidade por Status")
-                st.pyplot(fig1)
+    st.subheader("📈 Resumo")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Investido", f"R$ {df['valor'].sum():.2f}")
+    with col2:
+        st.metric("Retorno Total", f"R$ {df['retorno'].sum():.2f}")
+    with col3:
+        st.metric("Lucro/Prejuízo", f"R$ {df['lucro'].sum():.2f}")
 
-            with col5:
-                fig2, ax2 = plt.subplots()
-                df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax2, color="blue")
-                ax2.set_title("Lucro por Grupo")
-                st.pyplot(fig2)
+    st.subheader("📊 Gráficos")
+    col1, col2 = st.columns(2)
 
-if __name__ == "__main__":
-    main()
+    with col1:
+        fig, ax = plt.subplots()
+        df["status"].value_counts().plot(kind="pie", autopct="%1.1f%%", ax=ax)
+        ax.set_ylabel("")
+        ax.set_title("Distribuição por Status")
+        st.pyplot(fig)
+
+    with col2:
+        fig, ax = plt.subplots()
+        df.groupby("casa")["lucro"].sum().plot(kind="bar", ax=ax)
+        ax.set_title("Lucro por Casa")
+        st.pyplot(fig)
