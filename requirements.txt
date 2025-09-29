@@ -1,6 +1,6 @@
-streamlit==1.37.1
-pandas==2.2.2
-pytesseract==0.3.10
-Pillow==10.4.0
-matplotlib==3.9.2
+streamlit
+pandas
+pytesseract
+Pillow
+matplotlib
 sqlite3-binary
