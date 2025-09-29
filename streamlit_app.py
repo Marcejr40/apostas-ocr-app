@@ -55,5 +55,6 @@ st.subheader("📑 Apostas Registradas")
 st.dataframe(st.session_state["bets"], use_container_width=True)
 
 # ---- RESUMO ----
-df = st.session_s
+df = st.session_state["bets"]
+
 
