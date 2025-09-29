@@ -1,42 +1,40 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
+import sqlite3
+from datetime import datetime
 import pytesseract
 from PIL import Image
-import io
 import matplotlib.pyplot as plt
 
-# -----------------------------
-# Banco de Dados
-# -----------------------------
+# ==============================
+# Funções de Banco de Dados
+# ==============================
 def init_db():
     conn = sqlite3.connect("apostas.db")
-    cursor = conn.cursor()
-    cursor.execute("""
+    c = conn.cursor()
+    c.execute("""
         CREATE TABLE IF NOT EXISTS apostas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            esporte TEXT,
-            campeonato TEXT,
-            partida TEXT,
-            mercado TEXT,
-            odd REAL,
+            criado_em TEXT,
+            grupo TEXT,
+            casa TEXT,
+            descricao TEXT,
             valor REAL,
             retorno REAL,
-            data TEXT,
-            status TEXT,
-            imagem BLOB
+            lucro REAL,
+            status TEXT
         )
     """)
     conn.commit()
     conn.close()
 
-def insert_aposta(esporte, campeonato, partida, mercado, odd, valor, retorno, data, status, imagem):
+def add_bet_to_db(grupo, casa, descricao, valor, retorno, lucro, status):
     conn = sqlite3.connect("apostas.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO apostas (esporte, campeonato, partida, mercado, odd, valor, retorno, data, status, imagem)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (esporte, campeonato, partida, mercado, odd, valor, retorno, data, status, imagem))
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, lucro, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, valor, retorno, lucro, status))
     conn.commit()
     conn.close()
 
@@ -46,139 +44,94 @@ def load_bets_df():
     conn.close()
     return df
 
-def update_aposta(aposta_id, esporte, campeonato, partida, mercado, odd, valor, retorno, data, status):
-    conn = sqlite3.connect("apostas.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE apostas
-        SET esporte=?, campeonato=?, partida=?, mercado=?, odd=?, valor=?, retorno=?, data=?, status=?
-        WHERE id=?
-    """, (esporte, campeonato, partida, mercado, odd, valor, retorno, data, status, aposta_id))
-    conn.commit()
-    conn.close()
+# ==============================
+# Funções de OCR
+# ==============================
+def process_image(img, lang="por"):
+    try:
+        text = pytesseract.image_to_string(img, lang=lang)
+        return text
+    except Exception as e:
+        return f"Erro ao executar OCR: {e}"
 
-# -----------------------------
-# Funções auxiliares
-# -----------------------------
-def ocr_from_image(uploaded_file):
-    image = Image.open(uploaded_file)
-    text = pytesseract.image_to_string(image, lang="por")
-    return text, image
+# ==============================
+# Função principal
+# ==============================
+def main():
+    st.set_page_config(page_title="Gerenciador de Apostas", layout="wide")
+    st.title("📊 Gerenciador de Apostas com OCR")
 
-# -----------------------------
-# Interface Streamlit
-# -----------------------------
-st.set_page_config(page_title="Gestão de Apostas", layout="wide")
-st.title("📊 Gestão de Apostas com OCR")
+    init_db()
 
-init_db()
+    menu = ["Cadastrar Aposta", "Visualizar Apostas"]
+    choice = st.sidebar.radio("Menu", menu)
 
-menu = st.sidebar.radio("Menu", ["Nova Aposta", "Histórico", "Resumo Geral"])
+    if choice == "Cadastrar Aposta":
+        st.subheader("➕ Nova Aposta")
 
-# -----------------------------
-# Nova Aposta
-# -----------------------------
-if menu == "Nova Aposta":
-    st.subheader("Adicionar nova aposta")
+        uploaded_file = st.file_uploader("Carregar print da aposta", type=["png", "jpg", "jpeg"])
+        descricao = ""
+        if uploaded_file is not None:
+            img = Image.open(uploaded_file)
+            st.image(img, caption="Imagem carregada", use_container_width=True)
 
-    with st.form("nova_aposta_form"):
-        esporte = st.text_input("Esporte")
-        campeonato = st.text_input("Campeonato")
-        partida = st.text_input("Partida")
-        mercado = st.text_input("Mercado")
-        odd = st.number_input("Odd", min_value=1.01, step=0.01)
-        valor = st.number_input("Valor Apostado (R$)", min_value=0.0, step=1.0)
-        retorno = st.number_input("Retorno Esperado (R$)", min_value=0.0, step=1.0)
-        data = st.date_input("Data")
-        status = st.selectbox("Status", ["Aberta", "Green", "Red"])
-        uploaded_file = st.file_uploader("Comprovante (imagem)", type=["png", "jpg", "jpeg"])
+            ocr_result = process_image(img)
+            st.text_area("Texto reconhecido pelo OCR", ocr_result, height=150)
+            descricao = ocr_result
 
-        submitted = st.form_submit_button("Salvar")
+        with st.form("nova_aposta"):
+            grupo = st.text_input("Grupo")
+            casa = st.text_input("Casa")
+            valor = st.number_input("Valor apostado (R$)", min_value=0.0, step=0.01)
+            retorno = st.number_input("Retorno esperado (R$)", min_value=0.0, step=0.01)
+            status = st.selectbox("Status", ["Green", "Red", "Void"])
+            submitted = st.form_submit_button("Salvar")
 
-        if submitted:
-            img_bytes = uploaded_file.read() if uploaded_file else None
-            insert_aposta(esporte, campeonato, partida, mercado, odd, valor, retorno, str(data), status, img_bytes)
-            st.success("✅ Aposta salva com sucesso!")
+            if submitted:
+                lucro = 0
+                if status == "Green":
+                    lucro = retorno - valor
+                elif status == "Red":
+                    lucro = -valor
+                else:
+                    lucro = 0
 
-    st.markdown("---")
-    st.subheader("OCR do Comprovante")
-    img_file = st.file_uploader("Carregar imagem para OCR", type=["png", "jpg", "jpeg"], key="ocr_upload")
-    if img_file:
-        text, img = ocr_from_image(img_file)
-        st.image(img, caption="Imagem carregada", use_container_width=True)
-        st.text_area("Texto extraído", text, height=200)
+                add_bet_to_db(grupo, casa, descricao, valor, retorno, lucro, status)
+                st.success("Aposta salva com sucesso!")
 
-# -----------------------------
-# Histórico de Apostas
-# -----------------------------
-elif menu == "Histórico":
-    st.subheader("Histórico de apostas")
+    elif choice == "Visualizar Apostas":
+        st.subheader("📋 Histórico de Apostas")
 
-    df = load_bets_df()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
+        df = load_bets_df()
+        if df.empty:
+            st.warning("Nenhuma aposta cadastrada ainda.")
+        else:
+            st.dataframe(df, use_container_width=True)
 
-        aposta_id = st.number_input("ID da aposta para editar", min_value=1, step=1)
-        aposta = df[df["id"] == aposta_id]
+            st.subheader("📈 Resumo Financeiro")
+            total_investido = df["valor"].sum()
+            total_retorno = df["retorno"].sum()
+            total_lucro = df["lucro"].sum()
 
-        if not aposta.empty:
-            aposta = aposta.iloc[0]
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Investido", f"R$ {total_investido:,.2f}")
+            col2.metric("Total Retorno", f"R$ {total_retorno:,.2f}")
+            col3.metric("Lucro/Prejuízo", f"R$ {total_lucro:,.2f}")
 
-            with st.form("editar_aposta"):
-                esporte = st.text_input("Esporte", aposta["esporte"])
-                campeonato = st.text_input("Campeonato", aposta["campeonato"])
-                partida = st.text_input("Partida", aposta["partida"])
-                mercado = st.text_input("Mercado", aposta["mercado"])
-                odd = st.number_input("Odd", min_value=1.01, value=float(aposta["odd"]), step=0.01)
-                valor = st.number_input("Valor Apostado", min_value=0.0, value=float(aposta["valor"]), step=1.0)
-                retorno = st.number_input("Retorno Esperado", min_value=0.0, value=float(aposta["retorno"]), step=1.0)
-                data = st.text_input("Data", aposta["data"])
-                status = st.selectbox("Status", ["Aberta", "Green", "Red"], index=["Aberta","Green","Red"].index(aposta["status"]))
-                salvar = st.form_submit_button("Salvar Alterações")
+            st.subheader("📊 Gráficos")
+            col4, col5 = st.columns(2)
 
-                if salvar:
-                    update_aposta(aposta["id"], esporte, campeonato, partida, mercado, odd, valor, retorno, data, status)
-                    st.success("✅ Aposta atualizada!")
+            with col4:
+                fig1, ax1 = plt.subplots()
+                df["status"].value_counts().plot(kind="bar", ax=ax1, color=["green", "red", "gray"])
+                ax1.set_title("Quantidade por Status")
+                st.pyplot(fig1)
 
-    else:
-        st.info("Nenhuma aposta cadastrada ainda.")
+            with col5:
+                fig2, ax2 = plt.subplots()
+                df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax2, color="blue")
+                ax2.set_title("Lucro por Grupo")
+                st.pyplot(fig2)
 
-# -----------------------------
-# Resumo Geral
-# -----------------------------
-elif menu == "Resumo Geral":
-    st.subheader("📈 Resumo das apostas")
-
-    df = load_bets_df()
-    if not df.empty:
-        total_apostas = len(df)
-        total_investido = df["valor"].sum()
-        total_retorno = df["retorno"].sum()
-        lucro = total_retorno - total_investido
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total de Apostas", total_apostas)
-        col2.metric("Investido (R$)", f"{total_investido:,.2f}")
-        col3.metric("Retorno (R$)", f"{total_retorno:,.2f}")
-        col4.metric("Lucro (R$)", f"{lucro:,.2f}")
-
-        st.markdown("---")
-        st.subheader("Gráfico por Status")
-
-        status_counts = df["status"].value_counts()
-        fig, ax = plt.subplots()
-        ax.pie(status_counts, labels=status_counts.index, autopct="%1.1f%%")
-        ax.set_title("Distribuição por Status")
-        st.pyplot(fig)
-
-        st.markdown("---")
-        st.subheader("Gráfico por Esporte")
-
-        esporte_group = df.groupby("esporte")["valor"].sum()
-        fig2, ax2 = plt.subplots()
-        esporte_group.plot(kind="bar", ax=ax2)
-        ax2.set_ylabel("Valor Apostado (R$)")
-        st.pyplot(fig2)
-
-    else:
-        st.info("Nenhum dado disponível ainda.")
+if __name__ == "__main__":
+    main()
