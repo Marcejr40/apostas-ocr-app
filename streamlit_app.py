@@ -1,86 +1,87 @@
+```python
 import streamlit as st
 import pandas as pd
 import pytesseract
 from PIL import Image
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Leitor de Apostas OCR", layout="wide")
-st.title("📊 OCR de Apostas - Teste")
+# Configuração inicial
+st.set_page_config(page_title="Apostas OCR", layout="wide")
 
-# Inicializa o DataFrame
+# Inicializa sessão
 if "bets" not in st.session_state:
     st.session_state["bets"] = pd.DataFrame(columns=["Grupo", "Casa", "Descrição", "Valor", "Retorno", "Status"])
 
-def process_image_file(uploaded_file):
-    """Extrai texto e detecta status automático"""
-    try:
-        img = Image.open(uploaded_file)
-    except Exception as e:
-        return None, None, f"Erro ao abrir a imagem: {e}"
+st.title("📊 Acompanhamento de Apostas com OCR")
 
-    # Tenta OCR em português, se falhar cai no padrão
-    try:
-        text = pytesseract.image_to_string(img, lang="por")
-    except Exception:
-        text = pytesseract.image_to_string(img)
+# ---- UPLOAD E OCR ----
+st.header("📸 Ler Print da Aposta")
+uploaded_file = st.file_uploader("Envie o print da aposta", type=["png", "jpg", "jpeg"])
 
-    # Detecta status no texto
-    status = "Pendente"
-    lower_text = text.lower()
-    if any(word in lower_text for word in ["green", "ganho", "ganhou"]):
-        status = "Green"
-    elif any(word in lower_text for word in ["red", "perdida", "perdeu"]):
-        status = "Red"
-    elif any(word in lower_text for word in ["void", "anulada", "cancelada"]):
-        status = "Void"
-
-    return text, status, None
-
-# Upload de arquivo
-uploaded_file = st.file_uploader("Envie um print (PNG/JPG)", type=["png", "jpg", "jpeg"])
 if uploaded_file:
-    st.image(uploaded_file, caption="Print enviado", use_container_width=True)
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Print enviado", use_container_width=True)
 
-    extracted_text, auto_status, ocr_msg = process_image_file(uploaded_file)
+    try:
+        text = pytesseract.image_to_string(image, lang="por")
+        st.text_area("Texto detectado", text, height=150)
 
-    if extracted_text is None:
-        st.error(ocr_msg)
-    else:
-        st.subheader("📝 Texto extraído")
-        st.text_area("", extracted_text, height=180)
+        # Exemplo de parsing simples (ajustar conforme padrão das casas de aposta)
+        if "green" in text.lower():
+            status = "Green"
+        elif "red" in text.lower():
+            status = "Red"
+        elif "void" in text.lower():
+            status = "Void"
+        else:
+            status = "Pendente"
 
-        st.subheader("➕ Adicionar aposta")
-        with st.form("add_bet"):
-            grupo = st.text_input("Grupo", value="Grupo 1")
-            casa = st.text_input("Casa", value="")
-            descricao = st.text_area("Descrição", value=(extracted_text or "")[:200])
-            valor = st.number_input("Valor apostado (R$)", min_value=0.0, step=0.5, format="%.2f")
-            retorno = st.number_input("Retorno (R$)", min_value=0.0, step=0.5, format="%.2f")
-            status = st.selectbox("Status", ["Green", "Red", "Void", "Pendente"], 
-                                  index=["Green","Red","Void","Pendente"].index(auto_status))
+        # Entrada padrão simulada
+        nova_aposta = {
+            "Grupo": "Manual",
+            "Casa": "Detectar",
+            "Descrição": text[:50] + "...",
+            "Valor": 100.0,
+            "Retorno": 200.0 if status == "Green" else 0.0,
+            "Status": status,
+        }
+        st.session_state["bets"] = pd.concat([st.session_state["bets"], pd.DataFrame([nova_aposta])], ignore_index=True)
 
-            submit = st.form_submit_button("Salvar aposta")
-            if submit:
-                nova_linha = {
-                    "Grupo": grupo,
-                    "Casa": casa,
-                    "Descrição": descricao,
-                    "Valor": float(valor),
-                    "Retorno": float(retorno),
-                    "Status": status
-                }
-                st.session_state["bets"] = pd.concat(
-                    [st.session_state["bets"], pd.DataFrame([nova_linha])],
-                    ignore_index=True
-                )
-                st.success(f"✅ Aposta adicionada (Status detectado: {status})")
+    except Exception as e:
+        st.error(f"Erro ao executar OCR: {e}")
 
-# Dashboard
-if not st.session_state["bets"].empty:
-    st.subheader("📑 Histórico de apostas")
-    st.dataframe(st.session_state["bets"], use_container_width=True)
+# ---- TABELA DE APOSTAS ----
+st.header("📑 Apostas Registradas")
+st.dataframe(st.session_state["bets"], use_container_width=True)
 
-    st.subheader("📈 Estatísticas")
-    df = st.session_state["bets"]
-    resumo = df.groupby("Status").size()
-    st.bar_chart(resumo, use_container_width=True)
+# ---- RESUMO ----
+st.header("📊 Resumo de Resultados")
 
+df = st.session_state["bets"]
+
+if not df.empty:
+    df["Lucro"] = df["Retorno"] - df["Valor"]
+
+    total_reais = df["Lucro"].sum()
+    total_unidades = df["Lucro"].sum() / df["Valor"].mean() if df["Valor"].mean() > 0 else 0
+
+    col1, col2 = st.columns(2)
+    col1.metric("💰 Lucro/Prejuízo (R$)", f"{total_reais:.2f}")
+    col2.metric("📏 Lucro/Prejuízo (Unidades)", f"{total_unidades:.2f}")
+
+# ---- GRÁFICOS ----
+st.header("📈 Gráficos de Performance")
+
+if not df.empty:
+    # Gráfico por grupo
+    fig1, ax1 = plt.subplots()
+    df.groupby("Grupo")["Lucro"].sum().plot(kind="bar", ax=ax1)
+    ax1.set_title("Lucro por Grupo")
+    st.pyplot(fig1)
+
+    # Gráfico evolução
+    fig2, ax2 = plt.subplots()
+    df["Lucro"].cumsum().plot(ax=ax2)
+    ax2.set_title("Evolução do Lucro ao Longo do Tempo")
+    st.pyplot(fig2)
+```
