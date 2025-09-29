@@ -101,7 +101,7 @@ if uploaded_file:
     try:
         text = pytesseract.image_to_string(image, lang="por")
         st.text_area("Texto detectado", text, height=120)
-        descricao = text[:200]  # resumo da descrição
+        descricao = text[:200]  # resumo automático
     except Exception as e:
         st.error(f"Erro no OCR: {e}")
 
@@ -134,7 +134,6 @@ df = load_bets_df()
 if df.empty:
     st.info("Nenhuma aposta lançada ainda.")
 else:
-    # Converter data
     df["criado_em"] = pd.to_datetime(df["criado_em"])
 
     # FILTROS
@@ -145,14 +144,11 @@ else:
     data_fim = col2.date_input("Data fim", df["criado_em"].max().date())
     grupo_filtro = col3.selectbox("Grupo", ["Todos"] + sorted(df["grupo"].dropna().unique().tolist()))
 
-    # aplicar filtros
     df_filtrado = df[(df["criado_em"].dt.date >= data_inicio) & (df["criado_em"].dt.date <= data_fim)]
     if grupo_filtro != "Todos":
         df_filtrado = df_filtrado[df_filtrado["grupo"] == grupo_filtro]
 
-    # ========================
-    # RESUMO GERAL
-    # ========================
+    # RESUMO
     total_valor = df_filtrado["valor"].sum()
     total_retorno = df_filtrado["retorno"].sum()
     total_lucro = df_filtrado["lucro"].sum()
@@ -164,9 +160,7 @@ else:
 
     st.divider()
 
-    # ========================
     # LISTAGEM EDITÁVEL
-    # ========================
     for idx, row in df_filtrado.iterrows():
         with st.expander(f"ID {row['id']} | {row['casa']} | {row['status']} | R$ {row['valor']}"):
             with st.form(f"edit_form_{row['id']}"):
@@ -193,15 +187,11 @@ else:
                     st.warning(f"Aposta {row['id']} excluída com sucesso!")
                     st.experimental_rerun()
 
-    # ========================
     # GRÁFICOS
-    # ========================
     if not df_filtrado.empty:
         st.subheader("📈 Relatórios")
 
         col1, col2 = st.columns(2)
-
-        # Lucro por grupo
         with col1:
             st.write("Lucro total por Grupo (R$)")
             fig, ax = plt.subplots()
@@ -209,7 +199,6 @@ else:
             ax.set_ylabel("Lucro (R$)")
             st.pyplot(fig)
 
-        # Lucro por casa
         with col2:
             st.write("Lucro total por Casa (R$)")
             fig, ax = plt.subplots()
@@ -217,13 +206,11 @@ else:
             ax.set_ylabel("Lucro (R$)")
             st.pyplot(fig)
 
-        # Status - quantidade
         st.write("Distribuição por Status (quantidade)")
         fig, ax = plt.subplots()
         df_filtrado["status"].value_counts().plot(kind="pie", autopct="%1.1f%%", ax=ax)
         st.pyplot(fig)
 
-        # Status - lucro
         st.write("Lucro por Status (R$)")
         fig, ax = plt.subplots()
         df_filtrado.groupby("status")["lucro"].sum().plot(kind="bar", ax=ax, color=["green", "red", "gray"])
