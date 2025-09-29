@@ -3,3 +3,4 @@ pandas
 pillow
 pytesseract
 matplotlib
+sqlite3-binary
