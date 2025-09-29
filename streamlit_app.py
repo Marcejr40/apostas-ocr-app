@@ -122,7 +122,7 @@ with st.form("nova_aposta_form"):
 
 # ========================
 
-# HISTÓRICO + EDIÇÃO
+# HISTÓRICO + EDIÇÃO + FILTROS
 
 # ========================
 
@@ -134,7 +134,40 @@ df = load_bets_df()
 if df.empty:
     st.info("Nenhuma aposta lançada ainda.")
 else:
-    for idx, row in df.iterrows():
+    # Converter data
+    df["criado_em"] = pd.to_datetime(df["criado_em"])
+
+    # FILTROS
+    st.subheader("🔎 Filtros")
+    col1, col2, col3 = st.columns(3)
+
+    data_inicio = col1.date_input("Data início", df["criado_em"].min().date())
+    data_fim = col2.date_input("Data fim", df["criado_em"].max().date())
+    grupo_filtro = col3.selectbox("Grupo", ["Todos"] + sorted(df["grupo"].dropna().unique().tolist()))
+
+    # aplicar filtros
+    df_filtrado = df[(df["criado_em"].dt.date >= data_inicio) & (df["criado_em"].dt.date <= data_fim)]
+    if grupo_filtro != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["grupo"] == grupo_filtro]
+
+    # ========================
+    # RESUMO GERAL
+    # ========================
+    total_valor = df_filtrado["valor"].sum()
+    total_retorno = df_filtrado["retorno"].sum()
+    total_lucro = df_filtrado["lucro"].sum()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("💸 Total Apostado", f"R$ {total_valor:,.2f}")
+    col2.metric("📥 Total Retorno", f"R$ {total_retorno:,.2f}")
+    col3.metric("📊 Lucro Líquido", f"R$ {total_lucro:,.2f}")
+
+    st.divider()
+
+    # ========================
+    # LISTAGEM EDITÁVEL
+    # ========================
+    for idx, row in df_filtrado.iterrows():
         with st.expander(f"ID {row['id']} | {row['casa']} | {row['status']} | R$ {row['valor']}"):
             with st.form(f"edit_form_{row['id']}"):
                 grupo = st.text_input("Grupo", row["grupo"])
@@ -163,35 +196,37 @@ else:
     # ========================
     # GRÁFICOS
     # ========================
-    st.subheader("📈 Relatórios")
+    if not df_filtrado.empty:
+        st.subheader("📈 Relatórios")
 
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-    # Lucro por grupo
-    with col1:
-        st.write("Lucro total por Grupo (R$)")
+        # Lucro por grupo
+        with col1:
+            st.write("Lucro total por Grupo (R$)")
+            fig, ax = plt.subplots()
+            df_filtrado.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax, color="green")
+            ax.set_ylabel("Lucro (R$)")
+            st.pyplot(fig)
+
+        # Lucro por casa
+        with col2:
+            st.write("Lucro total por Casa (R$)")
+            fig, ax = plt.subplots()
+            df_filtrado.groupby("casa")["lucro"].sum().plot(kind="bar", ax=ax, color="blue")
+            ax.set_ylabel("Lucro (R$)")
+            st.pyplot(fig)
+
+        # Status - quantidade
+        st.write("Distribuição por Status (quantidade)")
         fig, ax = plt.subplots()
-        df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax, color="green")
+        df_filtrado["status"].value_counts().plot(kind="pie", autopct="%1.1f%%", ax=ax)
+        st.pyplot(fig)
+
+        # Status - lucro
+        st.write("Lucro por Status (R$)")
+        fig, ax = plt.subplots()
+        df_filtrado.groupby("status")["lucro"].sum().plot(kind="bar", ax=ax, color=["green", "red", "gray"])
         ax.set_ylabel("Lucro (R$)")
         st.pyplot(fig)
 
-    # Lucro por casa
-    with col2:
-        st.write("Lucro total por Casa (R$)")
-        fig, ax = plt.subplots()
-        df.groupby("casa")["lucro"].sum().plot(kind="bar", ax=ax, color="blue")
-        ax.set_ylabel("Lucro (R$)")
-        st.pyplot(fig)
-
-    # Status - quantidade
-    st.write("Distribuição por Status (quantidade)")
-    fig, ax = plt.subplots()
-    df["status"].value_counts().plot(kind="pie", autopct="%1.1f%%", ax=ax)
-    st.pyplot(fig)
-
-    # Status - lucro
-    st.write("Lucro por Status (R$)")
-    fig, ax = plt.subplots()
-    df.groupby("status")["lucro"].sum().plot(kind="bar", ax=ax, color=["green", "red", "gray"])
-    ax.set_ylabel("Lucro (R$)")
-    st.pyplot(fig)
