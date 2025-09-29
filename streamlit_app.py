@@ -20,34 +20,55 @@ st.title("📊 Apostas OCR — App funcional")
 # -------------------------
 DB_PATH = "apostas.db"
 
+DB_PATH = "apostas.db"
+
 def init_db():
+    # Abre conexão (permite uso em múltiplas threads do Streamlit)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    c = conn.cursor()
-    c.execute("""
+    cursor = conn.cursor()
+    # Cria tabela mínima se não existir (somente id) — depois vamos garantir colunas
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS apostas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            criado_em TEXT,
-            grupo TEXT,
-            casa TEXT,
-            descricao TEXT,
-            valor REAL,
-            retorno REAL,
-            lucro REAL,
-            status TEXT
+            id INTEGER PRIMARY KEY AUTOINCREMENT
         )
     """)
     conn.commit()
+
+    # Colunas esperadas e seus tipos
+    expected = {
+        "criado_em": "TEXT",
+        "grupo": "TEXT",
+        "casa": "TEXT",
+        "descricao": "TEXT",
+        "valor": "REAL",
+        "retorno": "REAL",
+        "lucro": "REAL",
+        "status": "TEXT"
+    }
+
+    # Verifica colunas que já existem
+    cursor.execute("PRAGMA table_info(apostas)")
+    existing = [row[1] for row in cursor.fetchall()]  # row[1] é o nome da coluna
+
+    # Adiciona colunas que faltam (ALTER TABLE ADD COLUMN)
+    for col, typ in expected.items():
+        if col not in existing:
+            cursor.execute(f"ALTER TABLE apostas ADD COLUMN {col} {typ}")
+    conn.commit()
     return conn
 
-conn = init_db()
-
 def add_bet_to_db(grupo, casa, descricao, valor, retorno, status):
-    lucro = float(retorno) - float(valor)
-    c = conn.cursor()
-    c.execute("""
+    # calcula lucro
+    try:
+        lucro = float(retorno) - float(valor)
+    except:
+        lucro = 0.0
+    cursor = conn.cursor()
+    # Insere explicitamente nas colunas que garantimos existir
+    cursor.execute("""
         INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, lucro, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, float(valor), float(retorno), lucro, status))
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, float(valor), float(retorno), float(lucro), status))
     conn.commit()
 
 def load_bets_df():
