@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 
 # ========================
 
-def init_db():
+def init_db():    
+    
 conn = sqlite3.connect("apostas.db")
 c = conn.cursor()
 c.execute("""
