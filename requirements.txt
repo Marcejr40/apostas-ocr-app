@@ -6,4 +6,3 @@ pytesseract==0.3.10
 matplotlib==3.9.2
 seaborn==0.13.2
 sqlalchemy==2.0.36
-
