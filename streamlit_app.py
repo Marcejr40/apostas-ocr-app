@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -139,4 +138,4 @@ if not df.empty:
     st.pyplot(fig)
 else:
     st.info("Nenhuma aposta registrada ainda. Faça upload de um print para começar.")
-```
+
