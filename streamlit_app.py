@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import pytesseract
@@ -46,18 +45,13 @@ def init_db():
 conn = init_db()
 
 def add_bet_to_db(grupo, casa, descricao, valor, retorno, status):
-    try:
-        lucro = float(retorno) - float(valor)
-    except:
-        lucro = 0.0
+    lucro = float(retorno) - float(valor)
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, lucro, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        grupo, casa, descricao, float(valor), float(retorno), float(lucro), status
-    ))
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao,
+          float(valor), float(retorno), float(lucro), status))
     conn.commit()
 
 def update_bet(bet_id, grupo, casa, descricao, valor, retorno, status):
@@ -124,8 +118,6 @@ uploaded_file = st.file_uploader("Envie um print da aposta", type=["png", "jpg",
 
 if uploaded_file is not None:
     imagem = Image.open(uploaded_file)
-
-    # mostrar imagem enviada
     st.image(imagem, caption="🖼️ Print enviado", use_container_width=True)
 
     dados = processar_imagem(imagem)
@@ -133,14 +125,8 @@ if uploaded_file is not None:
     st.json(dados)
 
     if st.button("Salvar aposta"):
-        add_bet_to_db(
-            dados["grupo"],
-            dados["casa"],
-            dados["descricao"],
-            dados["valor"],
-            dados["retorno"],
-            dados["status"],
-        )
+        add_bet_to_db(dados["grupo"], dados["casa"], dados["descricao"],
+                      dados["valor"], dados["retorno"], dados["status"])
         st.success("✅ Aposta salva no banco com sucesso!")
 
 # ===============================
@@ -157,36 +143,43 @@ if not df.empty:
     if grupo_filtro != "Todos":
         df = df[df["grupo"] == grupo_filtro]
 
-    st.dataframe(df, use_container_width=True)
+    # mostrar cada aposta com botões
+    for _, row in df.iterrows():
+        with st.expander(f"ID {row['id']} | {row['descricao'][:30]}..."):
+            st.write(f"**Grupo:** {row['grupo']}")
+            st.write(f"**Casa:** {row['casa']}")
+            st.write(f"**Descrição:** {row['descricao']}")
+            st.write(f"**Valor:** R$ {row['valor']}")
+            st.write(f"**Retorno:** R$ {row['retorno']}")
+            st.write(f"**Lucro:** R$ {row['lucro']}")
+            st.write(f"**Status:** {row['status']}")
 
-    # seção de edição
-    st.subheader("✏️ Editar ou Excluir Aposta")
-    aposta_id = st.number_input("ID da aposta para editar/excluir:", min_value=1, step=1)
+            col1, col2 = st.columns(2)
 
-    if aposta_id in df["id"].values:
-        aposta = df[df["id"] == aposta_id].iloc[0]
+            with col1:
+                if st.button(f"✏️ Editar {row['id']}", key=f"edit_{row['id']}"):
+                    novo_grupo = st.text_input("Grupo", row["grupo"], key=f"grupo_{row['id']}")
+                    nova_casa = st.text_input("Casa", row["casa"], key=f"casa_{row['id']}")
+                    nova_desc = st.text_area("Descrição", row["descricao"], key=f"desc_{row['id']}")
+                    novo_valor = st.number_input("Valor", value=float(row["valor"]), key=f"valor_{row['id']}")
+                    novo_retorno = st.number_input("Retorno", value=float(row["retorno"]), key=f"retorno_{row['id']}")
+                    novo_status = st.selectbox("Status", ["Green", "Red", "Void", "Indefinido"],
+                                               index=["Green","Red","Void","Indefinido"].index(row["status"]),
+                                               key=f"status_{row['id']}")
+                    if st.button("Salvar alterações", key=f"salvar_{row['id']}"):
+                        update_bet(row["id"], novo_grupo, nova_casa, nova_desc, novo_valor, novo_retorno, novo_status)
+                        st.success("✅ Aposta atualizada!")
+                        st.experimental_rerun()
 
-        novo_grupo = st.text_input("Grupo", aposta["grupo"])
-        nova_casa = st.text_input("Casa", aposta["casa"])
-        nova_desc = st.text_area("Descrição", aposta["descricao"])
-        novo_valor = st.number_input("Valor", value=float(aposta["valor"]))
-        novo_retorno = st.number_input("Retorno", value=float(aposta["retorno"]))
-        novo_status = st.selectbox("Status", ["Green", "Red", "Void", "Indefinido"], index=["Green", "Red", "Void", "Indefinido"].index(aposta["status"]))
-
-        if st.button("Salvar alterações"):
-            update_bet(aposta_id, novo_grupo, nova_casa, nova_desc, novo_valor, novo_retorno, novo_status)
-            st.success("✅ Aposta atualizada com sucesso!")
-        if st.button("Excluir aposta"):
-            delete_bet(aposta_id)
-            st.warning("❌ Aposta excluída com sucesso!")
+            with col2:
+                if st.button(f"❌ Excluir {row['id']}", key=f"delete_{row['id']}"):
+                    delete_bet(row["id"])
+                    st.warning("Aposta excluída!")
+                    st.experimental_rerun()
 
     # gráficos
     if "lucro" not in df.columns:
-        df["lucro"] = df.apply(
-            lambda row: row["retorno"] - row["valor"] if row["status"] == "Green"
-            else (-row["valor"] if row["status"] == "Red" else 0),
-            axis=1,
-        )
+        df["lucro"] = df["retorno"] - df["valor"]
 
     opcao = st.radio("Visualizar gráfico de:", [
         "Lucro Total por Status",
@@ -196,12 +189,10 @@ if not df.empty:
 
     if opcao == "Lucro Total por Status":
         resumo = df.groupby("status")["lucro"].sum()
-        st.write("### Lucro Total por Status")
         st.bar_chart(resumo)
 
     elif opcao == "Lucro Acumulado":
         df["lucro_acumulado"] = df["lucro"].cumsum()
-        st.write("### Lucro Acumulado")
         fig, ax = plt.subplots()
         ax.plot(df.index, df["lucro_acumulado"], marker="o")
         ax.set_title("Lucro Acumulado")
@@ -211,9 +202,7 @@ if not df.empty:
 
     elif opcao == "Lucro por Grupo":
         resumo_grupo = df.groupby("grupo")["lucro"].sum()
-        st.write("### Lucro Total por Grupo")
         st.bar_chart(resumo_grupo)
 
 else:
     st.info("Nenhuma aposta registrada ainda. Faça upload de um print para começar.")
-```
