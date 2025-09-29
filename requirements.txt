@@ -1,7 +1,5 @@
 streamlit
 pandas
+pillow
 pytesseract
-Pillow
-matplotlib
 rapidfuzz
-openpyxl
