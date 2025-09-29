@@ -3,3 +3,5 @@ pandas
 pillow
 pytesseract
 rapidfuzz
+openpyxl
+matplotlib
