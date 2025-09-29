@@ -252,7 +252,8 @@ if menu == "➕ Nova Aposta":
         if submit:
             add_bet_to_db(grupo, casa, descricao, valor, retorno, status)
             st.success("Aposta salva com sucesso!")
-            st.experimental_rerun()
+            st.rerun()
+
 
 elif menu == "📑 Histórico":
     st.header("📑 Histórico de Apostas")
