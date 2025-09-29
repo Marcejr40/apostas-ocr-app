@@ -1,4 +1,3 @@
-# streamlit_app.py  (versão completa - cerca de 340 linhas)
 import streamlit as st
 import pandas as pd
 import sqlite3
