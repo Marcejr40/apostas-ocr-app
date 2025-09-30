@@ -1,4 +1,3 @@
-# streamlit_app.py (corrigido: edição + exclusão sem conflito)
 import streamlit as st
 import sqlite3
 import pandas as pd
