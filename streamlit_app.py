@@ -7,13 +7,19 @@ import re
 from datetime import datetime
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Controle de Apostas com OCR", layout="wide")
+# ---------------------
+# Configuração
+# ---------------------
+st.set_page_config(page_title="Gestor de Apostas (OCR + Edição)", layout="wide")
+st.title("📊 Gestor de Apostas — OCR, Histórico e Edição (mesma tela)")
 
-# ------------------------
-# Banco de dados (SQLite)
-# ------------------------
+DB_FILE = "apostas.db"
+
+# ---------------------
+# Banco de dados
+# ---------------------
 def init_db():
-    conn = sqlite3.connect("apostas.db")
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS apostas (
@@ -32,33 +38,50 @@ def init_db():
     conn.commit()
     conn.close()
 
-def add_bet_to_db(grupo, casa, descricao, valor, retorno, odd, status):
+def add_bet(grupo, casa, descricao, valor, retorno, odd, status):
     lucro = retorno - valor if status == "Green" else (-valor if status == "Red" else 0.0)
-    conn = sqlite3.connect("apostas.db")
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     c = conn.cursor()
     c.execute("""
         INSERT INTO apostas (criado_em, grupo, casa, descricao, valor, retorno, odd, lucro, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        grupo, casa, descricao, float(valor), float(retorno), float(odd), float(lucro), status
-    ))
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), grupo, casa, descricao, float(valor), float(retorno), float(odd), float(lucro), status))
     conn.commit()
     conn.close()
 
 def load_bets_df():
-    conn = sqlite3.connect("apostas.db")
-    df = pd.read_sql("SELECT * FROM apostas ORDER BY id DESC", conn)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    df = pd.read_sql_query("SELECT * FROM apostas ORDER BY id DESC", conn)
     conn.close()
     return df
 
-# ------------------------
-# Funções auxiliares
-# ------------------------
+def update_bet(bet_id, grupo, casa, descricao, valor, retorno, odd, status):
+    lucro = retorno - valor if status == "Green" else (-valor if status == "Red" else 0.0)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""
+        UPDATE apostas
+        SET grupo=?, casa=?, descricao=?, valor=?, retorno=?, odd=?, lucro=?, status=?
+        WHERE id=?
+    """, (grupo, casa, descricao, float(valor), float(retorno), float(odd), float(lucro), status, bet_id))
+    conn.commit()
+    conn.close()
+
+def delete_bet(bet_id):
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("DELETE FROM apostas WHERE id=?", (bet_id,))
+    conn.commit()
+    conn.close()
+
+# ---------------------
+# Utilitários OCR + parsing
+# ---------------------
 def parse_brazil_currency(s: str):
     if s is None:
         return None
     s = s.strip().replace("R$", "").replace("r$", "").strip()
+    # trata milhar e decimal BR
     if "." in s and "," in s:
         s = s.replace(".", "").replace(",", ".")
     else:
@@ -71,39 +94,49 @@ def parse_brazil_currency(s: str):
 
 def find_currency_tokens(text: str):
     tokens = []
+    # R$ matches
     for m in re.findall(r"(R\$\s*[\d\.,]+)", text, flags=re.I):
         val = parse_brazil_currency(m)
         if val is not None:
             tokens.append((m, val))
+    # numeric patterns fallback
     for m in re.findall(r"(?<!R\$)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|\d+[.,]\d+)", text):
         val = parse_brazil_currency(m)
         if val is not None:
             tokens.append((m, val))
     return tokens
 
-def extrair_info_ocr(texto: str):
-    t = (texto or "").strip()
-    t_lower = t.lower()
+def classify_status_from_text(text: str):
+    t = (text or "").lower()
+    if any(k in t for k in ["retorno obtido", "retorno recebido", "ganhou", "ganho", "venc"]):
+        return "Green"
+    if any(k in t for k in ["anulado", "anulada", "cancelado", "cancelada", "void"]):
+        return "Void"
+    if any(k in t for k in ["perdeu", "perdida", "perdido", "lost", "red"]):
+        return "Red"
+    return "Indefinido"
 
-    # Debug do OCR
-    st.write("🔍 Texto OCR bruto:")
+def extract_info_from_ocr(text: str):
+    """
+    Retorna (valor, retorno, odd, status) com heurísticas.
+    Mostra tokens detectados (debug) para você ajustar se precisar.
+    """
+    t = (text or "")
+    t_lower = t.lower()
+    # debug: texto cru
+    st.write("🔍 Texto OCR bruto (debug):")
     st.code(t)
 
-    status = "Indefinido"
-    if any(x in t_lower for x in ["retorno obtido", "ganhou", "ganho"]):
-        status = "Green"
-    if "anulado" in t_lower or "anulada" in t_lower:
-        status = "Void"
-    if any(x in t_lower for x in ["perdeu", "perdida", "perdido", "red"]):
-        status = "Red"
+    status = classify_status_from_text(t)
 
+    # tenta capturar padrões explícitos
     valor = None
     retorno = None
     odd = None
 
     m_val = re.search(r"(?:aposta|valor)\s*[:\-]?\s*R?\$?\s*([\d\.,]+)", t, flags=re.I)
-    m_ret = re.search(r"(?:retorno(?: total| obtido)?)\s*[:\-]?\s*R?\$?\s*([\d\.,]+)", t, flags=re.I)
-    m_ret_after = re.search(r"R\$\s*([\d\.,]+)\s*(?:retorno|retorno total|retorno obtido)", t, flags=re.I)
+    m_ret = re.search(r"(?:retorno(?:\s+total|\s+obtido)?)\s*[:\-]?\s*R?\$?\s*([\d\.,]+)", t, flags=re.I)
+    m_ret_after = re.search(r"R\$\s*([\d\.,]+)\s*(?:retorno|retorno\s+total|retorno\s+obtido)", t, flags=re.I)
 
     if m_val:
         valor = parse_brazil_currency(m_val.group(1))
@@ -112,6 +145,7 @@ def extrair_info_ocr(texto: str):
     if m_ret_after and retorno is None:
         retorno = parse_brazil_currency(m_ret_after.group(1))
 
+    # odd candidates with format like 10.00
     odd_candidates = re.findall(r"\b(\d+\.\d{2})\b", t)
     for oc in odd_candidates:
         try:
@@ -124,15 +158,18 @@ def extrair_info_ocr(texto: str):
 
     tokens = find_currency_tokens(t)
     if tokens:
-        st.write("🔎 Valores detectados:", tokens)
+        st.write("🔎 Tokens monetários detectados (raw, valor):", tokens)
 
+    # heurística: se não achou retorno, usa tokens
     if retorno is None:
         vals = [v for (_, v) in tokens]
-        if len(vals) >= 2:
-            valor = valor or min(vals)
-            retorno = retorno or max(vals)
-        elif len(vals) == 1:
-            only = vals[0]
+        vals_sorted = sorted(vals)
+        if len(vals_sorted) >= 2:
+            # assume stake = menor, retorno = maior
+            valor = valor or vals_sorted[0]
+            retorno = retorno or vals_sorted[-1]
+        elif len(vals_sorted) == 1:
+            only = vals_sorted[0]
             if status == "Void":
                 valor = valor or only
                 retorno = only
@@ -140,9 +177,11 @@ def extrair_info_ocr(texto: str):
                 valor = valor or only
                 retorno = 0.0
             else:
+                # se há odd detectada e odd*valor ≈ only, tenta inferir
                 valor = valor or only
-                retorno = 0.0
+                retorno = retorno or 0.0
 
+    # fallback defaults
     if valor is None:
         valor = tokens[0][1] if tokens else 0.0
     if retorno is None:
@@ -156,62 +195,131 @@ def extrair_info_ocr(texto: str):
         except:
             odd = 1.0
 
-    st.write(f"✅ Extraído: Valor=R${valor:.2f}, Retorno=R${retorno:.2f}, Odd={odd:.2f}, Status={status}")
+    # garantir floats
+    valor = float(valor or 0.0)
+    retorno = float(retorno or 0.0)
+    odd = float(odd or 1.0)
+
+    st.write(f"✅ Extraído (heurística): valor=R${valor:.2f}, retorno=R${retorno:.2f}, odd={odd:.2f}, status={status}")
     return valor, retorno, odd, status
 
-# ------------------------
-# Interface Streamlit
-# ------------------------
+# ---------------------
+# Inicializa DB
+# ---------------------
 init_db()
-st.title("📊 Controle de Apostas com OCR")
 
-uploaded_file = st.file_uploader("Importar aposta (imagem)", type=["png", "jpg", "jpeg"])
-texto_ocr = ""
-valor_detectado, retorno_detectado, odd_detectado, status_detectado = 0.0, 0.0, 1.0, "Indefinido"
+# ---------------------
+# LAYOUT: Form de cadastro (lado esquerdo) | Histórico + gráficos (lado direito)
+# ---------------------
+col_left, col_right = st.columns([1, 1.35])
 
-if uploaded_file:
-    img = Image.open(uploaded_file)
-    st.image(img, caption="Imagem carregada", use_container_width=True)
-    try:
-        texto_ocr = pytesseract.image_to_string(img, lang="por")
-    except:
-        texto_ocr = pytesseract.image_to_string(img)
-    st.subheader("Texto detectado (OCR)")
-    st.code(texto_ocr)
-    valor_detectado, retorno_detectado, odd_detectado, status_detectado = extrair_info_ocr(texto_ocr)
+with col_left:
+    st.header("➕ Nova aposta (OCR ou manual)")
+    uploaded = st.file_uploader("Envie o print da aposta (opcional)", type=["png", "jpg", "jpeg"])
+    pre_val, pre_ret, pre_odd, pre_status = 0.0, 0.0, 1.0, "Indefinido"
+    ocr_text = ""
 
-st.subheader("Cadastrar / Conferir aposta")
-with st.form("form_aposta"):
-    grupo = st.text_input("Grupo", value="Grupo 1")
-    casa = st.text_input("Casa de aposta", value="Bet365")
-    descricao = st.text_area("Descrição", value=texto_ocr)
-    valor = st.number_input("Valor", min_value=0.0, value=float(valor_detectado), step=0.01, format="%.2f")
-    retorno = st.number_input("Retorno", min_value=0.0, value=float(retorno_detectado), step=0.01, format="%.2f")
-    odd = st.number_input("Odd", min_value=1.0, value=float(odd_detectado), step=0.01, format="%.2f")
-    status = st.selectbox("Status", ["Green", "Red", "Void", "Indefinido"], 
-                          index=["Green", "Red", "Void", "Indefinido"].index(status_detectado if status_detectado in ["Green","Red","Void"] else "Indefinido"))
-    submit = st.form_submit_button("Salvar aposta")
+    if uploaded:
+        img = Image.open(uploaded)
+        st.image(img, caption="Imagem carregada", use_container_width=True)
+        try:
+            ocr_text = pytesseract.image_to_string(img, lang="por")
+        except Exception:
+            ocr_text = pytesseract.image_to_string(img)
+        # extrai info
+        pre_val, pre_ret, pre_odd, pre_status = extract_info_from_ocr(ocr_text)
+    # formulário: utiliza values pré-detectadas
+    with st.form("form_new"):
+        st.subheader("Conferir / Editar antes de salvar")
+        grupo = st.text_input("Grupo", value="Grupo 1")
+        casa = st.text_input("Casa", value="")
+        descricao = st.text_area("Descrição (OCR)", value=ocr_text if ocr_text else "")
+        valor = st.number_input("Valor apostado (R$)", min_value=0.0, value=float(pre_val), step=0.01, format="%.2f")
+        retorno = st.number_input("Retorno (R$)", min_value=0.0, value=float(pre_ret), step=0.01, format="%.2f")
+        odd = st.number_input("Odd", min_value=1.0, value=float(pre_odd), step=0.01, format="%.2f")
+        status = st.selectbox("Status", ["Green", "Red", "Void", "Indefinido"], index=["Green","Red","Void","Indefinido"].index(pre_status if pre_status in ["Green","Red","Void"] else "Indefinido"))
+        saved = st.form_submit_button("💾 Salvar aposta")
 
-if submit:
-    add_bet_to_db(grupo, casa, descricao, valor, retorno, odd, status)
-    st.success("Aposta salva!")
+        if saved:
+            add_bet(grupo, casa, descricao, valor, retorno, odd, status)
+            st.success("Aposta salva com sucesso!")
+            st.experimental_rerun()
 
-st.subheader("Histórico de apostas")
-df = load_bets_df()
-if not df.empty:
-    st.dataframe(df, use_container_width=True)
-    st.subheader("Análises")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("Lucro por Status")
-        fig, ax = plt.subplots()
-        df.groupby("status")["lucro"].sum().plot(kind="bar", ax=ax, color=["green","red","gray","blue"])
-        st.pyplot(fig)
-    with col2:
-        st.write("Lucro por Grupo")
-        fig2, ax2 = plt.subplots()
-        df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax2)
-        st.pyplot(fig2)
+with col_right:
+    st.header("📋 Histórico & Gráficos")
+    df = load_bets_df()
+    if df.empty:
+        st.info("Nenhuma aposta registrada ainda.")
+    else:
+        # mostra tabela resumida
+        st.subheader("Tabela (últimas lançadas)")
+        st.dataframe(df, use_container_width=True)
+
+        # indicadores rápidos
+        total_investido = df["valor"].sum()
+        total_retorno = df["retorno"].sum()
+        total_lucro = df["lucro"].sum()
+        colA, colB, colC = st.columns(3)
+        colA.metric("Total investido (R$)", f"{total_investido:,.2f}")
+        colB.metric("Total retorno (R$)", f"{total_retorno:,.2f}")
+        colC.metric("Lucro total (R$)", f"{total_lucro:,.2f}")
+
+        st.markdown("---")
+        st.subheader("Gráficos")
+        g1, g2 = st.columns(2)
+        with g1:
+            st.write("Lucro por Status")
+            fig1, ax1 = plt.subplots()
+            df.groupby("status")["lucro"].sum().plot(kind="bar", ax=ax1, color=["green","red","gray"])
+            ax1.set_ylabel("Lucro (R$)")
+            st.pyplot(fig1)
+        with g2:
+            st.write("Lucro por Grupo")
+            fig2, ax2 = plt.subplots()
+            # tratar grupos vazios
+            if df["grupo"].notna().any():
+                df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax2)
+            st.pyplot(fig2)
+
+# ---------------------
+# EDIÇÃO (mesma tela, abaixo do histórico)
+# ---------------------
+st.markdown("---")
+st.header("✏️ Editar aposta existente")
+
+df_all = load_bets_df()
+if df_all.empty:
+    st.info("Sem apostas para editar.")
 else:
-    st.info("Nenhuma aposta registrada ainda.")
+    # escolhe por ID (lista de ids e uma breve descrição)
+    df_all["label"] = df_all.apply(lambda r: f"ID {int(r['id'])} | {r['grupo']} | {r['casa']} | R$ {r['valor']:.2f} | {r['status']}", axis=1)
+    options = df_all["label"].tolist()
+    choice = st.selectbox("Selecione a aposta para editar", options)
 
+    # extrai id
+    selected_id = int(re.search(r"ID\s+(\d+)", choice).group(1))
+    selected_row = df_all[df_all["id"] == selected_id].iloc[0]
+
+    st.write("Dados atuais da aposta selecionada:")
+    st.write(selected_row)
+
+    with st.form(f"form_edit_{selected_id}"):
+        e_grupo = st.text_input("Grupo", value=selected_row["grupo"])
+        e_casa = st.text_input("Casa", value=selected_row["casa"])
+        e_descricao = st.text_area("Descrição", value=selected_row["descricao"])
+        e_valor = st.number_input("Valor (R$)", min_value=0.0, value=float(selected_row["valor"]), step=0.01, format="%.2f")
+        e_retorno = st.number_input("Retorno (R$)", min_value=0.0, value=float(selected_row["retorno"]), step=0.01, format="%.2f")
+        e_odd = st.number_input("Odd", min_value=1.0, value=float(selected_row["odd"] if selected_row["odd"] is not None else 1.0), step=0.01, format="%.2f")
+        e_status = st.selectbox("Status", ["Green","Red","Void","Indefinido"], index=["Green","Red","Void","Indefinido"].index(selected_row["status"] if selected_row["status"] in ["Green","Red","Void"] else "Indefinido"))
+        btn_update = st.form_submit_button("💾 Salvar alterações")
+        btn_delete = st.form_submit_button("🗑️ Excluir aposta")
+
+        if btn_update:
+            update_bet(selected_id, e_grupo, e_casa, e_descricao, e_valor, e_retorno, e_odd, e_status)
+            st.success("Aposta atualizada!")
+            st.experimental_rerun()
+
+        if btn_delete:
+            delete_bet(selected_id)
+            st.warning("Aposta excluída.")
+            st.experimental_rerun()
