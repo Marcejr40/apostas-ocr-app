@@ -1,3 +1,4 @@
+# streamlit_app.py (corrigido: edição + exclusão sem conflito)
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -8,7 +9,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 
 # ---------------------
-# Configuração
+# Config
 # ---------------------
 st.set_page_config(page_title="Gestor de Apostas (OCR + Edição)", layout="wide")
 st.title("📊 Gestor de Apostas — OCR, Histórico e Edição (mesma tela)")
@@ -80,8 +81,7 @@ def delete_bet(bet_id):
 def parse_brazil_currency(s: str):
     if s is None:
         return None
-    s = s.strip().replace("R$", "").replace("r$", "").strip()
-    # trata milhar e decimal BR
+    s = str(s).strip().replace("R$", "").replace("r$", "").strip()
     if "." in s and "," in s:
         s = s.replace(".", "").replace(",", ".")
     else:
@@ -94,12 +94,10 @@ def parse_brazil_currency(s: str):
 
 def find_currency_tokens(text: str):
     tokens = []
-    # R$ matches
     for m in re.findall(r"(R\$\s*[\d\.,]+)", text, flags=re.I):
         val = parse_brazil_currency(m)
         if val is not None:
             tokens.append((m, val))
-    # numeric patterns fallback
     for m in re.findall(r"(?<!R\$)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|\d+[.,]\d+)", text):
         val = parse_brazil_currency(m)
         if val is not None:
@@ -117,19 +115,13 @@ def classify_status_from_text(text: str):
     return "Indefinido"
 
 def extract_info_from_ocr(text: str):
-    """
-    Retorna (valor, retorno, odd, status) com heurísticas.
-    Mostra tokens detectados (debug) para você ajustar se precisar.
-    """
     t = (text or "")
-    t_lower = t.lower()
     # debug: texto cru
     st.write("🔍 Texto OCR bruto (debug):")
     st.code(t)
 
     status = classify_status_from_text(t)
 
-    # tenta capturar padrões explícitos
     valor = None
     retorno = None
     odd = None
@@ -145,7 +137,6 @@ def extract_info_from_ocr(text: str):
     if m_ret_after and retorno is None:
         retorno = parse_brazil_currency(m_ret_after.group(1))
 
-    # odd candidates with format like 10.00
     odd_candidates = re.findall(r"\b(\d+\.\d{2})\b", t)
     for oc in odd_candidates:
         try:
@@ -160,12 +151,10 @@ def extract_info_from_ocr(text: str):
     if tokens:
         st.write("🔎 Tokens monetários detectados (raw, valor):", tokens)
 
-    # heurística: se não achou retorno, usa tokens
     if retorno is None:
         vals = [v for (_, v) in tokens]
         vals_sorted = sorted(vals)
         if len(vals_sorted) >= 2:
-            # assume stake = menor, retorno = maior
             valor = valor or vals_sorted[0]
             retorno = retorno or vals_sorted[-1]
         elif len(vals_sorted) == 1:
@@ -177,11 +166,9 @@ def extract_info_from_ocr(text: str):
                 valor = valor or only
                 retorno = 0.0
             else:
-                # se há odd detectada e odd*valor ≈ only, tenta inferir
                 valor = valor or only
-                retorno = retorno or 0.0
+                retorno = 0.0
 
-    # fallback defaults
     if valor is None:
         valor = tokens[0][1] if tokens else 0.0
     if retorno is None:
@@ -195,7 +182,6 @@ def extract_info_from_ocr(text: str):
         except:
             odd = 1.0
 
-    # garantir floats
     valor = float(valor or 0.0)
     retorno = float(retorno or 0.0)
     odd = float(odd or 1.0)
@@ -209,7 +195,7 @@ def extract_info_from_ocr(text: str):
 init_db()
 
 # ---------------------
-# LAYOUT: Form de cadastro (lado esquerdo) | Histórico + gráficos (lado direito)
+# Layout
 # ---------------------
 col_left, col_right = st.columns([1, 1.35])
 
@@ -226,9 +212,8 @@ with col_left:
             ocr_text = pytesseract.image_to_string(img, lang="por")
         except Exception:
             ocr_text = pytesseract.image_to_string(img)
-        # extrai info
         pre_val, pre_ret, pre_odd, pre_status = extract_info_from_ocr(ocr_text)
-    # formulário: utiliza values pré-detectadas
+
     with st.form("form_new"):
         st.subheader("Conferir / Editar antes de salvar")
         grupo = st.text_input("Grupo", value="Grupo 1")
@@ -241,9 +226,12 @@ with col_left:
         saved = st.form_submit_button("💾 Salvar aposta")
 
         if saved:
-            add_bet(grupo, casa, descricao, valor, retorno, odd, status)
-            st.success("Aposta salva com sucesso!")
-            st.experimental_rerun()
+            try:
+                add_bet(grupo, casa, descricao, valor, retorno, odd, status)
+                st.success("Aposta salva com sucesso!")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
 
 with col_right:
     st.header("📋 Histórico & Gráficos")
@@ -251,11 +239,9 @@ with col_right:
     if df.empty:
         st.info("Nenhuma aposta registrada ainda.")
     else:
-        # mostra tabela resumida
         st.subheader("Tabela (últimas lançadas)")
         st.dataframe(df, use_container_width=True)
 
-        # indicadores rápidos
         total_investido = df["valor"].sum()
         total_retorno = df["retorno"].sum()
         total_lucro = df["lucro"].sum()
@@ -276,7 +262,6 @@ with col_right:
         with g2:
             st.write("Lucro por Grupo")
             fig2, ax2 = plt.subplots()
-            # tratar grupos vazios
             if df["grupo"].notna().any():
                 df.groupby("grupo")["lucro"].sum().plot(kind="bar", ax=ax2)
             st.pyplot(fig2)
@@ -291,35 +276,46 @@ df_all = load_bets_df()
 if df_all.empty:
     st.info("Sem apostas para editar.")
 else:
-    # escolhe por ID (lista de ids e uma breve descrição)
     df_all["label"] = df_all.apply(lambda r: f"ID {int(r['id'])} | {r['grupo']} | {r['casa']} | R$ {r['valor']:.2f} | {r['status']}", axis=1)
     options = df_all["label"].tolist()
     choice = st.selectbox("Selecione a aposta para editar", options)
 
-    # extrai id
-    selected_id = int(re.search(r"ID\s+(\d+)", choice).group(1))
-    selected_row = df_all[df_all["id"] == selected_id].iloc[0]
+    selected_id_match = re.search(r"ID\s+(\d+)", choice)
+    if selected_id_match:
+        selected_id = int(selected_id_match.group(1))
+        selected_row = df_all[df_all["id"] == selected_id].iloc[0]
 
-    st.write("Dados atuais da aposta selecionada:")
-    st.write(selected_row)
+        st.write("Dados atuais da aposta selecionada:")
+        st.write(selected_row)
 
-    with st.form(f"form_edit_{selected_id}"):
-        e_grupo = st.text_input("Grupo", value=selected_row["grupo"])
-        e_casa = st.text_input("Casa", value=selected_row["casa"])
-        e_descricao = st.text_area("Descrição", value=selected_row["descricao"])
-        e_valor = st.number_input("Valor (R$)", min_value=0.0, value=float(selected_row["valor"]), step=0.01, format="%.2f")
-        e_retorno = st.number_input("Retorno (R$)", min_value=0.0, value=float(selected_row["retorno"]), step=0.01, format="%.2f")
-        e_odd = st.number_input("Odd", min_value=1.0, value=float(selected_row["odd"] if selected_row["odd"] is not None else 1.0), step=0.01, format="%.2f")
-        e_status = st.selectbox("Status", ["Green","Red","Void","Indefinido"], index=["Green","Red","Void","Indefinido"].index(selected_row["status"] if selected_row["status"] in ["Green","Red","Void"] else "Indefinido"))
-        btn_update = st.form_submit_button("💾 Salvar alterações")
-        btn_delete = st.form_submit_button("🗑️ Excluir aposta")
+        # Form de edição — só o botão "Atualizar" está dentro do form
+        with st.form(f"form_edit_{selected_id}"):
+            e_grupo = st.text_input("Grupo", value=selected_row["grupo"])
+            e_casa = st.text_input("Casa", value=selected_row["casa"])
+            e_descricao = st.text_area("Descrição", value=selected_row["descricao"])
+            e_valor = st.number_input("Valor (R$)", min_value=0.0, value=float(selected_row["valor"]), step=0.01, format="%.2f")
+            e_retorno = st.number_input("Retorno (R$)", min_value=0.0, value=float(selected_row["retorno"]), step=0.01, format="%.2f")
+            e_odd = st.number_input("Odd", min_value=1.0, value=float(selected_row["odd"] if selected_row["odd"] is not None else 1.0), step=0.01, format="%.2f")
+            e_status = st.selectbox("Status", ["Green","Red","Void","Indefinido"], index=["Green","Red","Void","Indefinido"].index(selected_row["status"] if selected_row["status"] in ["Green","Red","Void"] else "Indefinido"))
+            btn_update = st.form_submit_button("💾 Salvar alterações")
 
+        # Botão de deletar separado (fora do form) — evita conflito com form submit
+        if st.button("🗑️ Excluir aposta", key=f"del_{selected_id}"):
+            try:
+                delete_bet(selected_id)
+                st.success("Aposta excluída.")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Erro ao excluir: {e}")
+
+        # Processa a atualização (somente quando o form é submetido)
         if btn_update:
-            update_bet(selected_id, e_grupo, e_casa, e_descricao, e_valor, e_retorno, e_odd, e_status)
-            st.success("Aposta atualizada!")
-            st.experimental_rerun()
+            try:
+                update_bet(selected_id, e_grupo, e_casa, e_descricao, e_valor, e_retorno, e_odd, e_status)
+                st.success("Aposta atualizada!")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Erro ao atualizar: {e}")
+    else:
+        st.error("Não foi possível identificar o ID selecionado. Recarregue a página.")
 
-        if btn_delete:
-            delete_bet(selected_id)
-            st.warning("Aposta excluída.")
-            st.experimental_rerun()
