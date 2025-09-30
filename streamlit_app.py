@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -160,4 +159,4 @@ else:
 # INICIAR BANCO DE DADOS
 # =========================
 init_db()
-```
+
